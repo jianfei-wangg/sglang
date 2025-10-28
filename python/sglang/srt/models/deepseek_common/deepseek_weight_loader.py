@@ -79,6 +79,7 @@ class DeepseekV2WeightLoaderMixin:
         self: nn.Module,
         weights: Iterable[Tuple[str, torch.Tensor]],
         is_nextn: bool = False,
+        extra_params_mapping = None,
     ):
         """Load model weights from checkpoint.
 
@@ -108,6 +109,9 @@ class DeepseekV2WeightLoaderMixin:
             ("gate_up_proj", "gate_proj", 0),
             ("gate_up_proj", "up_proj", 1),
         ]
+
+        if extra_params_mapping is not None:
+            stacked_params_mapping.extend(extra_params_mapping)
 
         # Params for weights, fp8 weight scales, fp8 activation scales
         # (param_name, weight_name, expert_id, shard_id)

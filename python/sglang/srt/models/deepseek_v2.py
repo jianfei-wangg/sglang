@@ -2870,8 +2870,8 @@ class DeepseekV2ForCausalLM(nn.Module, DeepseekV2WeightLoaderMixin):
     def end_layer(self):
         return self.model.end_layer
 
-    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], is_nextn=False):
-        self.do_load_weights(weights, is_nextn)
+    def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], is_nextn=False, extra_params_mapping=None):
+        self.do_load_weights(weights, is_nextn, extra_params_mapping)
 
     def get_embed_and_head(self):
         return self.model.embed_tokens.weight, self.lm_head.weight
