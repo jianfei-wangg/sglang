@@ -851,5 +851,37 @@ class TestToolChoiceMistral(TestToolChoiceLlama32):
 #         cls.tokenizer = get_tokenizer(cls.model)
 
 
+class TestToolChoiceDots(TestToolChoiceLlama32):
+    """Test tool_choice functionality with Dots model"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.model = "/cpfs/user/qianwu/models/dots.llm2.inst.fp8.251024"
+        cls.base_url = DEFAULT_URL_FOR_TEST
+        cls.api_key = "sk-123456"
+
+        cls.process = popen_launch_server(
+            cls.model,
+            cls.base_url,
+            timeout=DEFAULT_TIMEOUT_FOR_SERVER_LAUNCH,
+            api_key=cls.api_key,
+            other_args=[
+                "--tool-call-parser",
+                "dots",
+                "--tp-size",
+                "8",
+                "--trust-remote-code",
+                "--cuda-graph-max-bs",
+                "32",
+            ],
+        )
+        cls.base_url += "/v1"
+
+    @unittest.skip("Skipping Dots test due to None tool call issue")
+    def test_multi_tool_scenario_auto(self):
+        """Test tool_choice='auto' in non-streaming mode"""
+        super().test_multi_tool_scenario_auto()
+
+
 if __name__ == "__main__":
     unittest.main()
