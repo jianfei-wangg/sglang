@@ -12,6 +12,7 @@ from sglang.srt.function_call.base_format_detector import BaseFormatDetector
 from sglang.srt.function_call.core_types import ToolCallItem
 from sglang.srt.function_call.deepseekv3_detector import DeepSeekV3Detector
 from sglang.srt.function_call.deepseekv31_detector import DeepSeekV31Detector
+from sglang.srt.function_call.dots_detector import Dots2Detector
 from sglang.srt.function_call.glm4_moe_detector import Glm4MoeDetector
 from sglang.srt.function_call.gpt_oss_detector import GptOssDetector
 from sglang.srt.function_call.kimik2_detector import KimiK2Detector
@@ -39,6 +40,7 @@ class FunctionCallParser:
     ToolCallParserEnum: Dict[str, Type[BaseFormatDetector]] = {
         "deepseekv3": DeepSeekV3Detector,
         "deepseekv31": DeepSeekV31Detector,
+        "dots": Dots2Detector,
         "glm": Glm4MoeDetector,
         "glm45": Glm4MoeDetector,
         "gpt-oss": GptOssDetector,
@@ -90,6 +92,9 @@ class FunctionCallParser:
             - The remaining text after parsing that was not consumed by the detector (can be treated as normal text)
             - A list of tool calls parsed from the text
         """
+        import inspect
+
+        print(f"full_text: {full_text} lineno: {inspect.currentframe().f_lineno}")
         if not self.tools:
             return full_text, []
         parsed_result = self.detector.detect_and_parse(full_text, self.tools)
@@ -111,6 +116,10 @@ class FunctionCallParser:
             - The normal text that should be displayed to the user
             - A list of tool calls parsed from the chunk
         """
+        import inspect
+
+        print(f"chunk_text: {chunk_text} lineno: {inspect.currentframe().f_lineno}")
+
         if not self.tools:
             return chunk_text, []
         final_normal_text = ""
