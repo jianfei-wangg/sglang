@@ -6,6 +6,7 @@ from PIL import Image
 
 from sglang.srt.models.dots_ocr import DotsOCRForCausalLM
 from sglang.srt.models.dots_vlm import DotsVLMForCausalLM
+from sglang.srt.models.dots_vlm17 import DotsVLM17ForCausalLM
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor,
     MultimodalSpecialTokens,
@@ -14,7 +15,7 @@ from sglang.srt.multimodal.processors.qwen_vl import resize_image_async
 
 
 class DotsVLMImageProcessor(BaseMultimodalProcessor):
-    models = [DotsVLMForCausalLM, DotsOCRForCausalLM]
+    models = [DotsVLMForCausalLM, DotsOCRForCausalLM, DotsVLM17ForCausalLM]
 
     def __init__(self, hf_config, server_args, _processor, *args, **kwargs):
         super().__init__(hf_config, server_args, _processor, *args, **kwargs)
