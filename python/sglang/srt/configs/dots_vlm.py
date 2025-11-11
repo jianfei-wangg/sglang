@@ -8,6 +8,8 @@ except ImportError:
         "Qwen2_5_VLProcessor can not be found. Please upgrade your transformers version."
     )
 
+from transformers.models.qwen2 import Qwen2Config
+
 from sglang.srt.configs.deepseekvl2 import DeepseekV2Config
 
 
@@ -66,6 +68,19 @@ class DotsVLMConfig(PretrainedConfig):
         self.vision_config = DotsVisionConfig(**vision_config)
         self.language_config = DeepseekV2Config(**kwargs)
         self.architectures = ["DotsVLMForCausalLM"]
+
+
+class DotsVLM17Config(PretrainedConfig):
+    model_type = "dots_vlm17"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        vision_config = kwargs.get("vision_config", {})
+        self.im_span_id = kwargs.get("image_token_id", 128815)
+        self.video_span_id = kwargs.get("video_token_id", 128836)
+        self.vision_config = DotsVisionConfig(**vision_config)
+        self.language_config = Qwen2Config(**kwargs)
+        self.architectures = ["DotsVLM17ForCausalLM"]
 
 
 class DotsVLMProcessorKwargs(ProcessingKwargs, total=False):
@@ -132,3 +147,4 @@ class DotsVLMProcessor(Qwen2_5_VLProcessor):
 
 
 AutoProcessor.register(DotsVLMConfig, DotsVLMProcessor)
+AutoProcessor.register(DotsVLM17Config, DotsVLMProcessor)
