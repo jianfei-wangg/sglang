@@ -24,7 +24,7 @@ from sglang.srt.models.deepseek_v2 import (
 )
 from sglang.srt.models.qwen3_moe import Qwen3MoeAttention
 from sglang.srt.server_args import get_global_server_args
-from sglang.srt.two_batch_overlap import model_forward_maybe_tbo
+from sglang.srt.batch_overlap.two_batch_overlap import model_forward_maybe_tbo
 from sglang.srt.utils import BumpAllocator, add_prefix, is_cuda, make_layers
 
 _is_cuda = is_cuda()
