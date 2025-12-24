@@ -11,7 +11,6 @@ from sglang.srt.function_call.core_types import (
     ToolCallItem,
     _GetInfoFunc,
 )
-from sglang.srt.function_call.ebnf_composer import EBNFComposer
 from sglang.srt.function_call.utils import _is_complete_json
 
 logger = logging.getLogger(__name__)
@@ -256,14 +255,4 @@ class Dots2Detector(BaseFormatDetector):
             begin='{"name": "' + name + '", "arguments": ',
             end="}",
             trigger='{"name": "' + name + '", "arguments": ',
-        )
-
-    def build_ebnf(self, tools: List[Tool]):
-        return EBNFComposer.build_ebnf(
-            tools,
-            sequence_start_token=self.bot_token,
-            sequence_end_token=self.eot_token,
-            tool_call_separator="",
-            call_rule_fmt='"{\\"name\\": \\"{name}\\", \\"arguments\\": "{arguments_rule}"}"',
-            function_format="json",
         )
