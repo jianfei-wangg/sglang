@@ -11,6 +11,7 @@ except ImportError:
 from transformers.models.qwen2 import Qwen2Config
 
 from sglang.srt.configs.deepseekvl2 import DeepseekV2Config
+from sglang.srt.configs.dots import DotsConfig
 
 
 class DotsVisionConfig(PretrainedConfig):
@@ -68,6 +69,18 @@ class DotsVLMConfig(PretrainedConfig):
         self.vision_config = DotsVisionConfig(**vision_config)
         self.language_config = DeepseekV2Config(**kwargs)
         self.architectures = ["DotsVLMForCausalLM"]
+
+class DotsVLM2Config(PretrainedConfig):
+    model_type = "dots_vlm2"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        vision_config = kwargs.get("vision_config", {})
+        self.im_span_id = kwargs.get("image_token_id", 128815)
+        self.video_span_id = kwargs.get("video_token_id", 128836)
+        self.vision_config = DotsVisionConfig(**vision_config)
+        self.language_config = DotsConfig(**kwargs)
+        self.architectures = ["DotsVLM2ForCausalLM"]
 
 
 class DotsVLM17Config(PretrainedConfig):
@@ -148,3 +161,4 @@ class DotsVLMProcessor(Qwen2_5_VLProcessor):
 
 AutoProcessor.register(DotsVLMConfig, DotsVLMProcessor)
 AutoProcessor.register(DotsVLM17Config, DotsVLMProcessor)
+AutoProcessor.register(DotsVLM2Config, DotsVLMProcessor)
