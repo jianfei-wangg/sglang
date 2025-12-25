@@ -3,6 +3,7 @@ from typing import Dict, List, Union
 
 from sglang.srt.models.dots_ocr import DotsOCRForCausalLM
 from sglang.srt.models.dots_vlm import DotsVLMForCausalLM
+from sglang.srt.models.dots_vlm2 import DotsVLM2ForCausalLM
 from sglang.srt.models.dots_vlm17 import DotsVLM17ForCausalLM
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor,
@@ -11,7 +12,7 @@ from sglang.srt.multimodal.processors.base_processor import (
 
 
 class DotsVLMImageProcessor(BaseMultimodalProcessor):
-    models = [DotsVLMForCausalLM, DotsOCRForCausalLM, DotsVLM17ForCausalLM]
+    models = [DotsVLMForCausalLM, DotsOCRForCausalLM, DotsVLM17ForCausalLM, DotsVLM2ForCausalLM]
 
     def __init__(self, hf_config, server_args, _processor, *args, **kwargs):
         super().__init__(hf_config, server_args, _processor, *args, **kwargs)
