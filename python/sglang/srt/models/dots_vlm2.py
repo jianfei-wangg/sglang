@@ -180,6 +180,13 @@ class DotsVLM2ForCausalLM(nn.Module):
             )
 
         return hidden_states
+    
+    def get_embed_and_head(self):
+        return self.language_model.get_embed_and_head()
+
+    def set_eagle3_layers_to_capture(self, layer_ids: Optional[List[int]] = None):
+        self.language_model.set_eagle3_layers_to_capture(layer_ids)
+
 
 
 EntryClass = [DotsVLM2ForCausalLM]
