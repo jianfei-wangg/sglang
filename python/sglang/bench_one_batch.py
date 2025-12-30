@@ -88,6 +88,12 @@ from sglang.srt.utils import (
 )
 from sglang.srt.utils.hf_transformers_utils import get_tokenizer
 
+# for multimodal inputs
+from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem, MultimodalInputs
+from sglang.srt.multimodal.processors.base_processor import BaseMultimodalProcessor
+from sglang.srt.managers.mm_utils import (MultiModalityDataPaddingPatternMultimodalTokens, init_mm_embedding_cache)
+
+pattern = MultiModalityDataPaddingPatternMultimodalTokens()
 profile_activities = [torch.profiler.ProfilerActivity.CPU] + [
     profiler_activity
     for available, profiler_activity in [
@@ -169,6 +175,7 @@ class BenchArgs:
     prompt_filename: str = ""
     result_filename: str = "result.jsonl"
     correctness_test: bool = False
+    multimodal_test: bool = False
     # This is only used for correctness test
     cut_len: int = 4
     log_decode_step: int = 0
@@ -197,6 +204,7 @@ class BenchArgs:
             "--result-filename", type=str, default=BenchArgs.result_filename
         )
         parser.add_argument("--correctness-test", action="store_true")
+        parser.add_argument("--multimodal-test", action="store_true")
         parser.add_argument("--cut-len", type=int, default=BenchArgs.cut_len)
         parser.add_argument(
             "--log-decode-step",
@@ -267,6 +275,7 @@ def load_model(server_args, port_args, gpu_id, tp_rank):
         tokenizer_mode=server_args.tokenizer_mode,
         trust_remote_code=server_args.trust_remote_code,
     )
+    init_mm_embedding_cache()
     if server_args.tp_size > 1:
         dist.barrier()
     return model_runner, tokenizer
@@ -306,6 +315,56 @@ def prepare_inputs_for_correctness_test(bench_args, tokenizer, custom_prompts):
 
     return input_ids, reqs
 
+
+im_start_id, im_end_id, image_token_id = (151660, 151661, 151659)
+def validate_multimodal_inputs(pixel_values: torch.Tensor, image_grid_thw: torch.Tensor):
+    # calculate the number of image tokens and image features
+    n_image_tokens = 0
+    for image_grid_thw_piece in image_grid_thw:
+        n_image_tokens += image_grid_thw_piece[0] * image_grid_thw_piece[1] * image_grid_thw_piece[2]
+    assert n_image_tokens > 0, "Number of image tokens must be greater than 0"
+    assert n_image_tokens == pixel_values.shape[0], "Number of image tokens must be equal to the number of image features"
+
+def add_multimodal_inputs(req: Req, pixel_values, image_grid_thw):
+    validate_multimodal_inputs(pixel_values, image_grid_thw)
+    req.multimodal_inputs = MultimodalInputs(mm_items=[], im_start_id=im_start_id, im_end_id=im_end_id, im_token_id=image_token_id)
+    mm_item = MultimodalDataItem(
+        modality=Modality.IMAGE,
+        feature=pixel_values,
+        hash=hash(pixel_values),
+    )
+    mm_item.image_grid_thw = image_grid_thw
+    mm_item.set_pad_value()
+    mm_item.offsets = BaseMultimodalProcessor.get_mm_items_offset(torch.tensor(req.origin_input_ids), image_token_id)
+    req.multimodal_inputs.mm_items.append(mm_item)
+    req.origin_input_ids = pattern.pad_input_tokens(req.origin_input_ids, req.multimodal_inputs)
+
+
+def prepare_inputs_for_multimodal_test(bench_args, tokenizer):
+    asset_path = "/cpfs/user/qianwu/assets"
+    needed_files = ["input_ids.pt", "pixel_values.pt", "image_grid_thw.pt"]
+    for file in needed_files:
+        if not os.path.exists(os.path.join(asset_path, file)):
+            raise FileNotFoundError(f"File {file} not found in {asset_path}")
+    input_ids = torch.load(os.path.join(asset_path, "input_ids.pt"))
+    pixel_values = torch.load(os.path.join(asset_path, "pixel_values.pt")).cpu().to()
+    image_grid_thw = torch.load(os.path.join(asset_path, "image_grid_thw.pt")).cpu()
+    reqs = []
+    req = Req(
+        rid=0,
+        origin_input_text=tokenizer.decode(input_ids),
+        origin_input_ids=input_ids,
+        sampling_params=SamplingParams(
+            temperature=0,
+            max_new_tokens=bench_args.output_len,
+        ),
+    )
+    # add multimodal data
+    add_multimodal_inputs(req, pixel_values, image_grid_thw)
+    req.fill_ids = req.origin_input_ids
+    req.extend_input_len = len(req.fill_ids) - len(req.prefix_indices)
+    reqs.append(req)
+    return [input_ids], reqs
 
 def prepare_extend_inputs_for_correctness_test(
     bench_args, input_ids, reqs, model_runner
@@ -470,6 +529,40 @@ def correctness_test(
     reqs = prepare_extend_inputs_for_correctness_test(
         bench_args, input_ids, reqs, model_runner
     )
+
+    # Extend (prefill w/ KV cache)
+    next_token_ids, next_token_logits, batch = extend(reqs, model_runner)
+    rank_print(f"prefill logits (final): {next_token_logits} \n")
+
+    # Decode
+    output_ids = [input_ids[i] + [next_token_ids[i]] for i in range(len(input_ids))]
+    for _ in range(bench_args.output_len[0] - 1):
+        next_token_ids, _ = decode(next_token_ids, batch, model_runner)
+        next_token_ids_list = next_token_ids.tolist()
+        for i in range(len(reqs)):
+            output_ids[i].append(next_token_ids_list[i])
+
+    # Print output texts
+    for i in range(len(reqs)):
+        rank_print(f"========== Prompt {i} ==========")
+        rank_print(tokenizer.decode(output_ids[i]), "\n")
+
+def multimodal_test(
+    server_args,
+    port_args,
+    bench_args,
+    gpu_id,
+    tp_rank,
+):
+    # Configure the logger
+    configure_logger(server_args, prefix=f" TP{tp_rank}")
+    rank_print = print if tp_rank == 0 else lambda *args, **kwargs: None
+
+    # Load the model
+    model_runner, tokenizer = load_model(server_args, port_args, gpu_id, tp_rank)
+
+    input_ids, reqs = prepare_inputs_for_multimodal_test(bench_args, tokenizer)
+    rank_print(f"\n{input_ids=}\n")
 
     # Extend (prefill w/ KV cache)
     next_token_ids, next_token_logits, batch = extend(reqs, model_runner)
@@ -740,6 +833,8 @@ def main(server_args, bench_args):
     if server_args.model_path:
         if bench_args.correctness_test:
             work_func = correctness_test
+        elif bench_args.multimodal_test:
+            work_func = multimodal_test
         else:
             work_func = latency_test
     else:
