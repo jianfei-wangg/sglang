@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
+from sglang.srt.mem_cache.memory_pool import MHATokenToKVPoolFP4
 import torch
 import triton
 import triton.language as tl
@@ -102,14 +103,17 @@ class TritonAttnBackend(AttentionBackend):
         ):
             # For hybrid linear models, layer_id = 0 may not be full attention
             self.v_head_dim = model_runner.token_to_kv_pool.get_v_head_dim()
+        elif isinstance(model_runner.token_to_kv_pool, MHATokenToKVPoolFP4):
+            self.v_head_dim = model_runner.token_to_kv_pool.get_raw_key_buffer(0).shape[
+                -1
+            ]
         else:
             self.v_head_dim = model_runner.token_to_kv_pool.get_value_buffer(0).shape[
                 -1
             ]
-        if (
-            hasattr(model_runner.token_to_kv_pool, "dtype")
-            and model_runner.token_to_kv_pool.dtype in ("int4", torch.float4_e2m1fn_x2)
-        ):
+        if hasattr(
+            model_runner.token_to_kv_pool, "dtype"
+        ) and model_runner.token_to_kv_pool.dtype in ("int4", torch.float4_e2m1fn_x2):
             self.v_head_dim = self.v_head_dim * 2
         self.max_context_len = model_runner.model_config.context_len
         self.device = model_runner.device
@@ -1024,7 +1028,11 @@ class TritonAttnBackend(AttentionBackend):
 
         # Check if KV cache is quantized (INT4/INT8) for optimized attention
         kv_pool = forward_batch.token_to_kv_pool
-        if hasattr(kv_pool, "dtype") and kv_pool.dtype in ("int4", "int8"):
+        if hasattr(kv_pool, "dtype") and kv_pool.dtype in (
+            "int4",
+            "int8",
+            torch.float4_e2m1fn_x2,
+        ):
             # Use optimized quantized attention kernel
             # This dequantizes KV cache on-the-fly inside the kernel, avoiding global memory writes
             self.decode_attention_fwd_quantized(

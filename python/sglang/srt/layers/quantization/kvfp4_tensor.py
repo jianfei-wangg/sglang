@@ -65,7 +65,7 @@ class KVFP4QuantizeUtil:
 
         # Pack two FP4 values into one uint8
         fp4_reshaped = fp4_vals.view(b, m, n)
-        packed = (fp4_reshaped[..., 1::2] << 4) + fp4_reshaped[..., 0::2]
+        packed = (fp4_reshaped[..., n//2:] << 4) + fp4_reshaped[..., :n//2]
 
         return packed, scale_factors
 
@@ -91,8 +91,8 @@ class KVFP4QuantizeUtil:
 
         # More efficient unpacking using bit operations
         fp4_vals = torch.empty(b, m, n, dtype=torch.uint8, device=quant_tensor.device)
-        fp4_vals[..., 0::2] = quant_tensor & 0x0F
-        fp4_vals[..., 1::2] = (quant_tensor >> 4) & 0x0F
+        fp4_vals[..., :n_half] = quant_tensor & 0x0F
+        fp4_vals[..., n_half:] = (quant_tensor >> 4) & 0x0F
 
         # Extract sign and magnitude
         sign_mask = (fp4_vals & 0x08) != 0

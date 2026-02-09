@@ -1001,13 +1001,13 @@ class MHATokenToKVPool(KVCache):
         return self.get_key_buffer(layer_id), self.get_value_buffer(layer_id)
 
     def get_raw_key_buffer(self, layer_id: int):
-        """Get raw quantized K buffer without dequantization (for INT4/INT8)."""
+        """Get raw quantized K buffer without dequantization (for INT4/INT8/FP4)."""
         if self.layer_transfer_counter is not None:
             self.layer_transfer_counter.wait_until(layer_id - self.start_layer)
         return self.k_buffer[layer_id - self.start_layer]
 
     def get_raw_value_buffer(self, layer_id: int):
-        """Get raw quantized V buffer without dequantization (for INT4/INT8)."""
+        """Get raw quantized V buffer without dequantization (for INT4/INT8/FP4)."""
         if self.layer_transfer_counter is not None:
             self.layer_transfer_counter.wait_until(layer_id - self.start_layer)
         return self.v_buffer[layer_id - self.start_layer]
@@ -1230,6 +1230,18 @@ class MHATokenToKVPoolFP4(MHATokenToKVPool):
         del self.v_buffer
         del self.k_scale_buffer
         del self.v_scale_buffer
+
+    def get_key_scales_zeros(self, layer_id: int):
+        """Get scales for K (for FP4 quantization)."""
+        if self.layer_transfer_counter is not None:
+            self.layer_transfer_counter.wait_until(layer_id - self.start_layer)
+        return self.k_scale_buffer[layer_id - self.start_layer]
+
+    def get_value_scales_zeros(self, layer_id: int):
+        """Get scales for V (for FP4 quantization)."""
+        if self.layer_transfer_counter is not None:
+            self.layer_transfer_counter.wait_until(layer_id - self.start_layer)
+        return self.v_scale_buffer[layer_id - self.start_layer]
 
     def get_raw_kv_buffer(self, layer_id: int):
         """

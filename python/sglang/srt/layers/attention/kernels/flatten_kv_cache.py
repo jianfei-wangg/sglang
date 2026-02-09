@@ -176,12 +176,12 @@ def _flatten_kv_cache_quant_sglang_fp4(
 
     # Load scale factors for each token and block
     # Scale factors are stored as uint8: scale_exp = scale_factor - 127
-    # packed[i] contains dim 2*i (lower) and dim 2*i+1 (upper)
-    # So for lower: dim_offset = offs_dk * 2
-    # For upper: dim_offset = offs_dk * 2 + 1
+    # packed[i] contains dim i (lower, first half) and dim i+HALF_HDK (upper, second half)
+    # So for lower: dim_offset = offs_dk (dims 0..HALF_HDK-1)
+    # For upper: dim_offset = offs_dk + HALF_HDK (dims HALF_HDK..HEAD_DIM_K-1)
     head_dim_offset = head_id * HEAD_DIM_K
-    k_lower_dim_offsets = offs_dk[None, :] * 2
-    k_upper_dim_offsets = offs_dk[None, :] * 2 + 1
+    k_lower_dim_offsets = offs_dk[None, :]
+    k_upper_dim_offsets = offs_dk[None, :] + HALF_HDK
     k_lower_block_indices = (head_dim_offset + k_lower_dim_offsets) // SCALE_BLOCK_SIZE
     k_upper_block_indices = (head_dim_offset + k_upper_dim_offsets) // SCALE_BLOCK_SIZE
 
@@ -209,27 +209,26 @@ def _flatten_kv_cache_quant_sglang_fp4(
     k_lower = (k_lower_vals * k_lower_scale).to(ko_ptr.dtype.element_ty)
     k_upper = (k_upper_vals * k_upper_scale).to(ko_ptr.dtype.element_ty)
 
-    # Store: packed[i] contains dim 2*i (lower) and dim 2*i+1 (upper)
-    k_lower_dim_offsets_out = offs_dk[None, :] * 2
-    k_upper_dim_offsets_out = offs_dk[None, :] * 2 + 1
-    mask_k_lower_out = k_lower_dim_offsets_out < HEAD_DIM_K
-    mask_k_upper_out = k_upper_dim_offsets_out < HEAD_DIM_K
-
+    # Store: packed[i] contains dim i (lower, first half) and dim i+HALF_HDK (upper, second half)
+    # Store lower half to [0, HEAD_DIM_K//2)
     ko_ptrs_lower = (
         ko_ptr
         + head_id * stride_koh
         + out_positions[:, None] * stride_kos
-        + k_lower_dim_offsets_out * stride_kod
+        + offs_dk[None, :] * stride_kod
     )
-    tl.store(ko_ptrs_lower, k_lower, mask=mask_tok[:, None] & mask_k_lower_out)
+    tl.store(ko_ptrs_lower, k_lower, mask=mask_tok[:, None] & mask_dk_packed[None, :])
 
+    # Store upper half to [HEAD_DIM_K//2, HEAD_DIM_K)
+    offs_dk_upper = offs_dk + HALF_HDK
+    mask_dk_upper = offs_dk_upper < HEAD_DIM_K
     ko_ptrs_upper = (
         ko_ptr
         + head_id * stride_koh
         + out_positions[:, None] * stride_kos
-        + k_upper_dim_offsets_out * stride_kod
+        + offs_dk_upper[None, :] * stride_kod
     )
-    tl.store(ko_ptrs_upper, k_upper, mask=mask_tok[:, None] & mask_k_upper_out)
+    tl.store(ko_ptrs_upper, k_upper, mask=mask_tok[:, None] & mask_dk_upper[None, :])
 
     # ==== Process V cache ====
     # Similar logic for V
@@ -273,8 +272,8 @@ def _flatten_kv_cache_quant_sglang_fp4(
 
     # Load scale factors for V (similar to K)
     head_dim_offset_v = head_id * HEAD_DIM_V
-    v_lower_dim_offsets = offs_dv[None, :] * 2
-    v_upper_dim_offsets = offs_dv[None, :] * 2 + 1
+    v_lower_dim_offsets = offs_dv[None, :]
+    v_upper_dim_offsets = offs_dv[None, :] + HALF_HDV
     v_lower_block_indices = (head_dim_offset_v + v_lower_dim_offsets) // SCALE_BLOCK_SIZE
     v_upper_block_indices = (head_dim_offset_v + v_upper_dim_offsets) // SCALE_BLOCK_SIZE
 
@@ -301,27 +300,26 @@ def _flatten_kv_cache_quant_sglang_fp4(
     v_lower = (v_lower_vals * v_lower_scale).to(vo_ptr.dtype.element_ty)
     v_upper = (v_upper_vals * v_upper_scale).to(vo_ptr.dtype.element_ty)
 
-    # Store: packed[i] contains dim 2*i (lower) and dim 2*i+1 (upper)
-    v_lower_dim_offsets_out = offs_dv[None, :] * 2
-    v_upper_dim_offsets_out = offs_dv[None, :] * 2 + 1
-    mask_v_lower_out = v_lower_dim_offsets_out < HEAD_DIM_V
-    mask_v_upper_out = v_upper_dim_offsets_out < HEAD_DIM_V
-
+    # Store: packed[i] contains dim i (lower, first half) and dim i+HALF_HDV (upper, second half)
+    # Store lower half to [0, HEAD_DIM_V//2)
     vo_ptrs_lower = (
         vo_ptr
         + head_id * stride_voh
         + out_positions[:, None] * stride_vos
-        + v_lower_dim_offsets_out * stride_vod
+        + offs_dv[None, :] * stride_vod
     )
-    tl.store(vo_ptrs_lower, v_lower, mask=mask_tok[:, None] & mask_v_lower_out)
+    tl.store(vo_ptrs_lower, v_lower, mask=mask_tok[:, None] & mask_dv_packed[None, :])
 
+    # Store upper half to [HEAD_DIM_V//2, HEAD_DIM_V)
+    offs_dv_upper = offs_dv + HALF_HDV
+    mask_dv_upper = offs_dv_upper < HEAD_DIM_V
     vo_ptrs_upper = (
         vo_ptr
         + head_id * stride_voh
         + out_positions[:, None] * stride_vos
-        + v_upper_dim_offsets_out * stride_vod
+        + offs_dv_upper[None, :] * stride_vod
     )
-    tl.store(vo_ptrs_upper, v_upper, mask=mask_tok[:, None] & mask_v_upper_out)
+    tl.store(vo_ptrs_upper, v_upper, mask=mask_tok[:, None] & mask_dv_upper[None, :])
 
 
 @triton.jit
