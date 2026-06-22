@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 import torch
@@ -387,7 +388,7 @@ class C4IndexerBackend:
                 from deep_gemm import fp8_paged_mqa_logits as fn
 
         _c4sl = indexer_metadata.c4_seq_lens
-        if _c4sl.dim() == 1:
+        if _c4sl.dim() == 1 and not envs.SGLANG_FP8_PAGED_MQA_LOGITS_TORCH.get():
             _c4sl = _c4sl.unsqueeze(-1)
         logits = fn(
             q_fp8,

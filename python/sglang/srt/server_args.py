@@ -149,7 +149,12 @@ ENCODER_TRANSFER_BACKEND_CHOICES = ["zmq_to_scheduler", "zmq_to_tokenizer", "moo
 
 GRAMMAR_BACKEND_CHOICES = ["xgrammar", "outlines", "llguidance", "none"]
 
-DETERMINISTIC_ATTENTION_BACKEND_CHOICES = ["flashinfer", "fa3", "triton"]
+DETERMINISTIC_ATTENTION_BACKEND_CHOICES = [
+    "flashinfer",
+    "fa3",
+    "triton",
+    "compressed",
+]
 
 RADIX_SUPPORTED_DETERMINISTIC_ATTENTION_BACKEND = ["fa3", "triton"]
 
@@ -2582,6 +2587,7 @@ class ServerArgs:
                         "DeepseekV2ForCausalLM",
                         "DeepseekV3ForCausalLM",
                         "DeepseekV32ForCausalLM",
+                        "DeepseekV4ForCausalLM",
                         "MistralLarge3ForCausalLM",
                         "PixtralForConditionalGeneration",
                     ]
@@ -2613,11 +2619,45 @@ class ServerArgs:
                     f"but you explicitly specified '{self.attention_backend}'."
                 )
 
+            is_deepseek_v4_model = False
+            try:
+                is_deepseek_v4_model = (
+                    parse_connector_type(self.model_path) != ConnectorType.INSTANCE
+                    and self.get_model_config().hf_config.architectures[0]
+                    == "DeepseekV4ForCausalLM"
+                )
+            except Exception:
+                pass
+
             if is_deepseek_model:
-                if self.attention_backend not in ["fa3", "triton"]:
+                deepseek_deterministic_backends = ["fa3", "triton"]
+                if is_deepseek_v4_model:
+                    deepseek_deterministic_backends.append("compressed")
+                if self.attention_backend not in deepseek_deterministic_backends:
                     raise ValueError(
                         f"Currently only {RADIX_SUPPORTED_DETERMINISTIC_ATTENTION_BACKEND} attention backends are supported for deterministic inference with DeepSeek models. But you're using {self.attention_backend}."
                     )
+
+            if is_deepseek_v4_model and self.attention_backend == "compressed":
+                self.disable_radix_cache = True
+                if get_bool_env_var("SGLANG_DSV4_DET_DISABLE_OVERLAP", "true"):
+                    self.disable_overlap_schedule = True
+                    envs.SGLANG_OPT_USE_MULTI_STREAM_OVERLAP.set(False)
+                    envs.SGLANG_OPT_USE_FUSED_STORE_CACHE.set(False)
+                    envs.SGLANG_OPT_USE_OVERLAP_STORE_CACHE.set(False)
+                if get_bool_env_var("SGLANG_DSV4_DET_TRITON_FP8_GEMM", "true"):
+                    self.fp8_gemm_runner_backend = "triton"
+                if get_bool_env_var("SGLANG_DSV4_DET_C4_TORCH", "true"):
+                    envs.SGLANG_FP8_PAGED_MQA_LOGITS_TORCH.set(True)
+                    envs.SGLANG_TOPK_TRANSFORM_512_TORCH.set(True)
+                envs.SGLANG_OPT_DEEPGEMM_HC_PRENORM.set(False)
+                envs.SGLANG_OPT_USE_TILELANG_MHC_PRE.set(False)
+                envs.SGLANG_OPT_USE_TILELANG_MHC_POST.set(False)
+                logger.warning(
+                    "DeepSeekV4 deterministic inference is experimental: using compressed "
+                    "attention with radix cache/overlap disabled, optional triton FP8 GEMM, and "
+                    "deterministic-friendly dsv4 operator fallbacks."
+                )
 
             if (
                 self.attention_backend

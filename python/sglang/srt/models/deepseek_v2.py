@@ -311,6 +311,7 @@ class MoEGate(nn.Module):
     ):
         super().__init__()
         self.is_nextn = is_nextn
+        self.is_deepseek_v4 = is_deepseek_v4
         self.weight = nn.Parameter(
             torch.empty((config.n_routed_experts, config.hidden_size))
         )
@@ -347,6 +348,10 @@ class MoEGate(nn.Module):
             )
 
         if get_global_server_args().enable_deterministic_inference:
+            if self.is_deepseek_v4 and os.getenv(
+                "SGLANG_DSV4_DET_FP32_GATE", "1"
+            ).lower() not in ("0", "false", "off"):
+                return F.linear(hidden_states.float(), self.weight.float(), None)
             return F.linear(hidden_states, self.weight, None)
 
         if False:
