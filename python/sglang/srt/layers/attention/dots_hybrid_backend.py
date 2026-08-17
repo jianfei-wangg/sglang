@@ -11,7 +11,6 @@ from sglang.kernels.ops.attention.flash_attention import flash_attn_varlen_func
 from sglang.srt.layers.attention.base_attn_backend import (
     AttentionBackend,
     SharedReadEnds,
-    normalize_page_table_rows,
 )
 from sglang.srt.layers.attention.hybrid_attn_backend import HybridAttnBackend
 
@@ -19,6 +18,23 @@ if TYPE_CHECKING:
     from sglang.srt.layers.radix_attention import RadixAttention
     from sglang.srt.model_executor.forward_batch_info import ForwardBatch, ForwardMode
     from sglang.srt.speculative.spec_info import SpecInput
+
+
+def _normalize_page_table_rows(
+    page_table: torch.Tensor, batch_size: int
+) -> torch.Tensor:
+    """Match Dots' pre-planned SWA table to the live DP-padded batch."""
+    if page_table.shape[0] >= batch_size:
+        return page_table[:batch_size]
+    return torch.cat(
+        [
+            page_table,
+            page_table.new_zeros(
+                (batch_size - page_table.shape[0], page_table.shape[1])
+            ),
+        ],
+        dim=0,
+    )
 
 
 @dataclass
@@ -101,11 +117,6 @@ class DotsSWAMLAAttnBackend(AttentionBackend):
 
     def on_after_cuda_graph_warmup(self):
         self.backend.on_after_cuda_graph_warmup()
-
-    def normalize_forward_metadata_for_dp_padding(
-        self, forward_batch: ForwardBatch
-    ) -> None:
-        self.backend.normalize_forward_metadata_for_dp_padding(forward_batch)
 
     def update_verify_buffers_to_fill_after_draft(
         self, spec_info: SpecInput, cuda_graph_bs: int | None
@@ -228,7 +239,7 @@ class DotsSWAMLAAttnBackend(AttentionBackend):
             )
 
         bs = forward_batch.batch_size
-        block_table = normalize_page_table_rows(block_table, bs)
+        block_table = _normalize_page_table_rows(block_table, bs)
         cache_seqlens = metadata.cache_seqlens_int32
         if cache_seqlens.shape[0] != bs:
             cache_seqlens = forward_batch.seq_lens[:bs].to(torch.int32)
