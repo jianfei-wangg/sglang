@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -92,18 +93,48 @@ class DotsSWAMLAAttnBackend(AttentionBackend):
 
         return isinstance(self.selected_backend(forward_batch), FlashAttentionBackend)
 
+    @contextmanager
+    def _use_draft_step_out_cache_loc(self, forward_batch: ForwardBatch):
+        """Expose only this backend's draft-step write locations to FA."""
+        from sglang.srt.layers.attention.flashattention_backend import (
+            FlashAttentionBackend,
+        )
+
+        original = forward_batch.out_cache_loc
+        backend = self._active_backend
+        if (
+            isinstance(backend, FlashAttentionBackend)
+            and original is not None
+            and forward_batch.forward_mode.is_decode_or_idle()
+            and forward_batch.spec_info is not None
+            and backend.speculative_num_steps > 0
+            and original.numel()
+            == forward_batch.batch_size * backend.topk * backend.speculative_num_steps
+        ):
+            forward_batch.out_cache_loc = original.view(
+                forward_batch.batch_size,
+                backend.topk,
+                backend.speculative_num_steps,
+            )[:, :, backend.speculative_step_id].reshape(-1)
+        try:
+            yield
+        finally:
+            forward_batch.out_cache_loc = original
+
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         self._active_backend = self.selected_backend(forward_batch)
-        self.backend.init_forward_metadata(forward_batch)
+        with self._use_draft_step_out_cache_loc(forward_batch):
+            self.backend.init_forward_metadata(forward_batch)
         self._init_prefill_metadata(forward_batch)
 
     def init_forward_metadata_out_graph(
         self, forward_batch: ForwardBatch, in_capture: bool = False
     ):
         self._active_backend = self.selected_backend(forward_batch)
-        self.backend.init_forward_metadata_out_graph(
-            forward_batch, in_capture=in_capture
-        )
+        with self._use_draft_step_out_cache_loc(forward_batch):
+            self.backend.init_forward_metadata_out_graph(
+                forward_batch, in_capture=in_capture
+            )
         self._init_prefill_metadata(forward_batch)
 
     def init_forward_metadata_in_graph(self, forward_batch: ForwardBatch):
@@ -315,12 +346,6 @@ class DotsHybridAttnBackend(AttentionBackend):
     def on_after_cuda_graph_warmup(self):
         self.dsa_backend.on_after_cuda_graph_warmup()
         self.swa_backend.on_after_cuda_graph_warmup()
-
-    def normalize_forward_metadata_for_dp_padding(
-        self, forward_batch: ForwardBatch
-    ) -> None:
-        self.dsa_backend.normalize_forward_metadata_for_dp_padding(forward_batch)
-        self.swa_backend.normalize_forward_metadata_for_dp_padding(forward_batch)
 
     def forward(
         self,
