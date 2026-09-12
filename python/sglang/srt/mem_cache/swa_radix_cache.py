@@ -1269,13 +1269,12 @@ class SWARadixCache(BasePrefixCache):
             # 2. total_prefix_length < swa_evicted_seqlen < total_length:
             #    Split: [total_prefix_length, swa_evicted_seqlen) as tombstone,
             #           [swa_evicted_seqlen, total_length) as non-tombstone.
-            # 3. swa_evicted_seqlen == total_length:
+            # 3. swa_evicted_seqlen >= total_length:
             #    All remaining tokens are evicted. Free value and return without
             #    creating a node (leaf nodes must not be tombstone).
-            #    Note: the -page_size fix in _evict_swa prevents this case from
-            #    occurring in normal operation. This check is a defensive guard
-            #    against unexpected eviction states from other code paths.
-            if swa_evicted_seqlen == total_prefix_length + len(key):
+            #    Eagle page-aligns the insert below the raw seq (drops the last
+            #    bigram page), so swa_evicted can land strictly past len(key).
+            if swa_evicted_seqlen >= total_prefix_length + len(key):
                 self.token_to_kv_pool_allocator.free_full(value)
                 return total_prefix_length
 
@@ -1301,6 +1300,24 @@ class SWARadixCache(BasePrefixCache):
                 self._maybe_split_leaf_for_swa_lock(new_leaf)
 
         return total_prefix_length
+
+    def _swa_unmapped_prefix_len(self, value: torch.Tensor) -> int:
+        """Page-aligned prefix of ``value`` whose full→SWA mapping is gone."""
+        n = len(value)
+        if n == 0:
+            return 0
+        swa = self.token_to_kv_pool_allocator.translate_loc_from_full_to_swa(value)
+        if swa is None or swa.numel() == 0:
+            return n
+        real = swa > 0
+        if self.page_size > 1:
+            real = real & (swa // self.page_size > 0)
+        if not bool(real.any().item()):
+            return n
+        first = int(real.to(dtype=torch.int64).argmax().item())
+        if self.page_size > 1:
+            first = (first // self.page_size) * self.page_size
+        return first
 
     def _recover_tombstone_keeping_locked_full(
         self, node: TreeNode, incoming_full: torch.Tensor
@@ -1334,6 +1351,22 @@ class SWARadixCache(BasePrefixCache):
         swa_tombstone: bool = False,
     ) -> TreeNode:
         assert len(key) > 0, f"key should not be empty"
+        assert len(key) == len(
+            value
+        ), f"radix node key/value length mismatch: {len(key)=}, {len(value)=}"
+        if not swa_tombstone:
+            unmapped = self._swa_unmapped_prefix_len(value)
+            if unmapped >= len(value):
+                swa_tombstone = True
+            elif unmapped > 0:
+                parent = self._add_new_node(
+                    parent,
+                    key[:unmapped],
+                    value[:unmapped],
+                    swa_tombstone=True,
+                )
+                key = key[unmapped:]
+                value = value[unmapped:]
         new_node = TreeNode()
         new_node.parent = parent
         new_node.key = key
@@ -1342,7 +1375,11 @@ class SWARadixCache(BasePrefixCache):
         parent.children[key.child_key(self.page_size)] = new_node
         self.full_lru_list.insert_mru(new_node)
         self.full_evictable_size_ += len(value)
-        if not swa_tombstone:
+        if swa_tombstone:
+            # Window eviction may have already returned SWA; only free live slots.
+            if self._swa_unmapped_prefix_len(value) < len(value):
+                self.token_to_kv_pool_allocator.free_swa(value)
+        else:
             self.swa_lru_list.insert_mru(new_node)
             self.swa_evictable_size_ += len(value)
         self.kv_events.record_store(new_node)
@@ -1377,16 +1414,16 @@ class SWARadixCache(BasePrefixCache):
         key = node.key.child_key(self.page_size)
         v = node.parent.children.pop(key, None)
         assert v == node, f"parent does not have child key, {key}"
-        self.full_evictable_size_ -= len(node.key)
+        self.full_evictable_size_ -= len(node.value)
         # Tombstoned leaves were never (re-)added to swa_lru_list and were
         # already removed from swa_evictable_size_ when they were tombstoned.
         if not node.swa_tombstone:
-            self.swa_evictable_size_ -= len(node.key)
+            self.swa_evictable_size_ -= len(node.value)
 
     def _tombstone_internal_node(self, node: TreeNode) -> None:
         assert len(node.children) != 0, f"Cannot tombstone a leaf node, {node.id=}"
         node.swa_tombstone = True
-        self.swa_evictable_size_ -= len(node.key)
+        self.swa_evictable_size_ -= len(node.value)
 
     def _delete_tombstone_leaf(self, node: TreeNode) -> None:
         assert (
@@ -1397,7 +1434,7 @@ class SWARadixCache(BasePrefixCache):
         v = node.parent.children.pop(key, None)
         assert v == node, f"parent does not have child key, {key}"
 
-        self.full_evictable_size_ -= len(node.key)
+        self.full_evictable_size_ -= len(node.value)
 
     def _collect_nontombstone_nodes(self) -> List[TreeNode]:
         ret_list = []

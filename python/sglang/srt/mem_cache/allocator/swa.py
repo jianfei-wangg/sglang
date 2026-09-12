@@ -362,10 +362,18 @@ class SWATokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         swa_indices = self.full_to_swa_index_mapping[mapping_indices]
         self.clear_full_to_swa_mapping(mapping_indices)
 
+        swa_indices = swa_indices[swa_indices > 0]
+        if self.page_size > 1 and swa_indices.numel() > 0:
+            # Dummy page 0 occupies slots 1..page_size-1, which pass `> 0`.
+            swa_indices = swa_indices[swa_indices // self.page_size > 0]
+        if swa_indices.numel() == 0:
+            return
+        swa_indices = torch.unique(swa_indices)
+
         if self.free_group is not None:
             # Resolve ownership now. A cache action later in this group may
             # install a new mapping for the same full index.
-            self.swa_free_group.append(swa_indices)
+            self.swa_free_group.append(swa_indices.clone())
             return
 
         self._release_swa(swa_indices)
@@ -373,7 +381,12 @@ class SWATokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
     def _release_swa(self, swa_indices: torch.Tensor):
         # One filter per group: its data-dependent shape costs a sync, and
         # filtering the batch selects the same slots as filtering per call.
-        self.swa_attn_allocator.free(swa_indices[swa_indices > 0])
+        live = swa_indices[swa_indices > 0]
+        if self.page_size > 1 and live.numel() > 0:
+            live = live[live // self.page_size > 0]
+        if live.numel() == 0:
+            return
+        self.swa_attn_allocator.free(live)
         assert self.swa_attn_allocator.available_size() <= self.swa_attn_allocator.size
 
     def free_full(self, free_index: torch.Tensor):
@@ -396,15 +409,24 @@ class SWATokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         self.full_free_group = []
 
     def free_group_end(self):
-        super().free_group_end()
+        # Do not call BaseTokenToKVPoolAllocator.free_group_end: its `free()`
+        # would run free_swa on `free_group` and then flush `swa_free_group`
+        # again for tombstone inserts.
+        pending, self.free_group = self.free_group, None
+        if pending:
+            merged = torch.cat(pending)
+            self.full_attn_allocator.free(merged)
+            # Mapping for these was often already cleared by a deferred free_swa
+            # during the group; free_swa is then a no-op for those pages.
+            self.free_swa(merged)
         if self.swa_free_group:
-            swa_free_group = self.swa_free_group
+            merged = torch.unique(torch.cat(self.swa_free_group))
             self.swa_free_group = []
-            self._release_swa(torch.cat(swa_free_group))
+            self._release_swa(merged)
         if self.full_free_group:
-            full_free_group = self.full_free_group
+            merged = torch.cat(self.full_free_group)
             self.full_free_group = []
-            self.free_full(torch.cat(full_free_group))
+            self.full_attn_allocator.free(merged)
         assert (
             self.full_attn_allocator.available_size() <= self.full_attn_allocator.size
         )

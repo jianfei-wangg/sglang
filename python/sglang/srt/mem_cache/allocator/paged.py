@@ -308,10 +308,29 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
         assert len(torch.unique(pages)) == len(pages)
 
     def _release_page_ids(self, *page_ids: torch.Tensor):
+        existing = self.free_pages
+        if len(self.release_pages) > 0:
+            existing = torch.cat((self.free_pages, self.release_pages))
+        kept = []
+        for p in page_ids:
+            if p.numel() == 0:
+                continue
+            # Slot 0 is the dummy page; it is not part of `size`.
+            p = p[p > 0]
+            # Production: re-inserting a free page overcounts available by one
+            # page (SWA idle +64 with full_e == swa_e). Debug keeps duplicates
+            # so `_debug_check_no_duplicate_pages` still fires.
+            if (not self.debug_mode) and p.numel() > 0 and existing.numel() > 0:
+                p = p[~torch.isin(p, existing)]
+            if p.numel() > 0:
+                kept.append(p)
+                existing = torch.cat((existing, p)) if existing.numel() else p
+        if not kept:
+            return
         if self.need_sort:
-            self.release_pages = torch.cat((*page_ids, self.release_pages))
+            self.release_pages = torch.cat((*kept, self.release_pages))
         else:
-            self.free_pages = torch.cat((*page_ids, self.free_pages))
+            self.free_pages = torch.cat((*kept, self.free_pages))
 
     def free_group_begin(self):
         super().free_group_begin()
